@@ -403,26 +403,30 @@ class Arkose:
                 guess=json.loads(guess)
                 answers.append({"px": guess['px'] ,"py": guess['py'], "x": guess['x'], "y": guess['y'], sess:ion})
 
-        resource_loader = _jsdom_local.ResourceLoader({"userAgent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self.chrome_version}.0.0.0 Safari/537.36"})
-        vm = _jsdom_local.JSDOM("", {
-            "runScripts": "dangerously",
-            "resources": resource_loader,
-            "pretendToBeVisual": True,
-            "storageQuota": 10000000
-        }).getInternalVMContext()
+        try:
+            resource_loader = _jsdom_local.ResourceLoader({"userAgent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self.chrome_version}.0.0.0 Safari/537.36"})
+            vm = _jsdom_local.JSDOM("", {
+                "runScripts": "dangerously",
+                "resources": resource_loader,
+                "pretendToBeVisual": True,
+                "storageQuota": 10000000
+            }).getInternalVMContext()
 
-        _create_script_local("""
-        response=null;
+            _create_script_local("""
+            response=null;
 
-        window.parent.ae={"answer":answers}
+            window.parent.ae={"answer":answers}
 
-        window.parent.ae[("dapibRecei" + "ve")]=function(data) {
-        response=JSON.stringify(data);
-        }
-        """.replace("answers",json.dumps(answers).replace('"index"','index'))).runInContext(vm)
+            window.parent.ae[("dapibRecei" + "ve")]=function(data) {
+            response=JSON.stringify(data);
+            }
+            """.replace("answers",json.dumps(answers).replace('"index"','index'))).runInContext(vm)
 
-        _create_script_local(dapibCode).runInContext(vm)
-        result=json.loads(_create_script_local("response").runInContext(vm))
+            _create_script_local(dapibCode).runInContext(vm)
+            result=json.loads(_create_script_local("response").runInContext(vm))
+        except (TypeError, AttributeError) as e:
+            logger.print(f"tguess JS execution failed: {e}", f.YELLOW + "Proceeding without tguess")
+            return None
 
         if Arkose.is_flagged(result["tanswer"]):
             for array in result["tanswer"]:
@@ -710,6 +714,129 @@ class Funcaptcha:
     def callback(self, data, cookies=None):
         self.session.post(f"{self.apiurl}/fc/a/", data=data, cookies=cookies)
 
+    def _classify_image(self, base64_img, game_data):
+        """Classify a funcaptcha challenge image using AI vision API.
+        
+        Supports OpenAI (OPENAI_API_KEY) and Google Gemini (GEMINI_API_KEY).
+        Returns the answer index (0-based for game_type 4, or grid index for type 3).
+        """
+        import requests as py_requests
+        
+        instruction = game_data.get('instruction_string', '')
+        game_type = game_data.get('gameType', 4)
+        game_variant = game_data.get('game_variant', '')
+        
+        # Build the classification prompt
+        if game_type == 4:
+            prompt = (
+                f"This is a funcaptcha challenge image of type '{instruction}'. "
+                "The image is a filmstrip showing cups with icons being shuffled. "
+                "At the bottom-left corner there is a reference icon showing which icon to track. "
+                "Look at the LAST frame (rightmost part of the filmstrip) and determine which cup "
+                "position (numbered 0-5, left to right) has the icon matching the reference. "
+                "The cups are arranged in the scene - count positions from left to right. "
+                "Reply with ONLY a single digit (0-5), nothing else."
+            )
+        elif game_type == 3:
+            prompt = (
+                f"This is a funcaptcha grid challenge of type '{instruction}'. "
+                f"Game variant: {game_variant}. "
+                "The image shows a grid. Identify the correct cell. "
+                "Reply with ONLY a single digit (0-5 for the grid position), nothing else."
+            )
+        else:
+            prompt = (
+                f"This is a funcaptcha challenge. Type: {game_type}, instruction: '{instruction}'. "
+                "Determine the correct answer index (0-5). "
+                "Reply with ONLY a single digit, nothing else."
+            )
+
+        # Try OpenAI first
+        openai_key = os.environ.get('OPENAI_API_KEY', '')
+        if openai_key:
+            try:
+                resp = py_requests.post(
+                    'https://api.openai.com/v1/chat/completions',
+                    headers={'Authorization': f'Bearer {openai_key}', 'Content-Type': 'application/json'},
+                    json={
+                        'model': 'gpt-4o',
+                        'messages': [{
+                            'role': 'user',
+                            'content': [
+                                {'type': 'text', 'text': prompt},
+                                {'type': 'image_url', 'image_url': {'url': f'data:image/png;base64,{base64_img}', 'detail': 'high'}}
+                            ]
+                        }],
+                        'max_tokens': 10,
+                        'temperature': 0
+                    },
+                    timeout=30
+                )
+                if resp.status_code == 200:
+                    answer = resp.json()['choices'][0]['message']['content'].strip()
+                    for ch in answer:
+                        if ch.isdigit() and int(ch) <= 5:
+                            print(f"[CLASSIFY] OpenAI answer: {ch} (raw: {answer})", flush=True)
+                            return int(ch)
+                else:
+                    print(f"[CLASSIFY] OpenAI error: {resp.status_code} {resp.text[:200]}", flush=True)
+            except Exception as e:
+                print(f"[CLASSIFY] OpenAI exception: {e}", flush=True)
+
+        # Try Gemini
+        gemini_key = os.environ.get('GEMINI_API_KEY', '')
+        if gemini_key:
+            try:
+                resp = py_requests.post(
+                    f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}',
+                    headers={'Content-Type': 'application/json'},
+                    json={
+                        'contents': [{'parts': [
+                            {'text': prompt},
+                            {'inline_data': {'mime_type': 'image/png', 'data': base64_img}}
+                        ]}],
+                        'generationConfig': {'temperature': 0, 'maxOutputTokens': 10}
+                    },
+                    timeout=30
+                )
+                if resp.status_code == 200:
+                    answer = resp.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+                    for ch in answer:
+                        if ch.isdigit() and int(ch) <= 5:
+                            print(f"[CLASSIFY] Gemini answer: {ch} (raw: {answer})", flush=True)
+                            return int(ch)
+                else:
+                    print(f"[CLASSIFY] Gemini error: {resp.status_code} {resp.text[:200]}", flush=True)
+            except Exception as e:
+                print(f"[CLASSIFY] Gemini exception: {e}", flush=True)
+
+        # Try local Ollama (moondream vision model)
+        try:
+            resp = py_requests.post(
+                'http://localhost:11434/api/generate',
+                json={
+                    'model': os.environ.get('OLLAMA_MODEL', 'moondream'),
+                    'prompt': prompt,
+                    'images': [base64_img],
+                    'stream': False
+                },
+                timeout=120
+            )
+            if resp.status_code == 200:
+                answer = resp.json().get('response', '').strip()
+                for ch in answer:
+                    if ch.isdigit() and int(ch) <= 5:
+                        print(f"[CLASSIFY] Ollama answer: {ch} (raw: {answer[:50]})", flush=True)
+                        return int(ch)
+                print(f"[CLASSIFY] Ollama no valid digit in: {answer[:100]}", flush=True)
+        except Exception as e:
+            print(f"[CLASSIFY] Ollama not available: {e}", flush=True)
+
+        # Fallback: random guess
+        fallback = random.randint(0, 5)
+        print(f"[CLASSIFY] All classifiers failed. Random fallback: {fallback}", flush=True)
+        return fallback
+
     def solve(self):
         try:
             self.solve_time=time.time()
@@ -935,7 +1062,7 @@ class Funcaptcha:
                 else:
                     base64_img=base64.b64encode(self.session.get(img).content).decode()
 
-                index=... #Do classification urself!!
+                index = self._classify_image(base64_img, result['game_data'])
 
                 if result["game_data"]["gameType"]==3:
                     index+=1
@@ -969,6 +1096,7 @@ class Funcaptcha:
             
         except Exception as err:
             tb = traceback.format_exc()
+            print(f"[SOLVE ERROR] {tb}", flush=True)
             Utils.errors+=1
             return {"success":False, "err": f"internal error: {str(err)}", "token": None}
             
