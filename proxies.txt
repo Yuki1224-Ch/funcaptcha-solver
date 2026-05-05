@@ -1,0 +1,7 @@
+# Proxy File
+# Supported formats (one per line):
+# host:port
+# host:port:user:pass
+# user:pass@host:port
+# http://host:port
+# http://user:pass@host:port
