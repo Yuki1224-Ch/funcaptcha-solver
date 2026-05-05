@@ -241,13 +241,144 @@ class RobloxLogin:
             error_message="Max captcha retries exhausted",
         )
 
+    def _solve_pow_challenge(self, resp, username, password):
+        """
+        Solve a Roblox Proof of Work challenge and re-attempt login.
+
+        Flow:
+        1. Extract challenge metadata from response headers
+        2. Get the time-lock puzzle from the PoW API
+        3. Solve the puzzle (compute A^(2^T) mod N)
+        4. Submit the solution to get a redemption token
+        5. Continue the challenge
+        6. If a follow-up captcha challenge is returned, solve it
+        7. Re-submit login with challenge headers
+        """
+        try:
+            challenge_id = resp.headers.get("rblx-challenge-id", "")
+            challenge_metadata = resp.headers.get("rblx-challenge-metadata", "")
+            meta = json.loads(base64.b64decode(challenge_metadata).decode())
+            session_id = meta["sessionId"]
+
+            # Get the puzzle
+            puzzle_resp = self.session.get(
+                "https://apis.roblox.com/proof-of-work-service/v1/pow-puzzle",
+                params={"sessionID": session_id},
+                timeout=config.REQUEST_TIMEOUT,
+            )
+            puzzle = puzzle_resp.json()
+            artifacts = json.loads(puzzle["artifacts"])
+            N = int(artifacts["N"])
+            A = int(artifacts["A"])
+            T = int(artifacts["T"])
+
+            # Solve time-lock puzzle: compute A^(2^T) mod N
+            result = A
+            for _ in range(T):
+                result = (result * result) % N
+            answer = str(result)
+
+            # Submit solution
+            redeem_resp = self.session.post(
+                "https://apis.roblox.com/proof-of-work-service/v1/pow-puzzle",
+                json={"sessionID": session_id, "solution": answer},
+                timeout=config.REQUEST_TIMEOUT,
+            )
+            redeem_data = redeem_resp.json()
+            if not redeem_data.get("answerCorrect"):
+                return LoginResult(
+                    result_type=LoginResult.CAPTCHA_FAILED,
+                    username=username,
+                    password=password,
+                    error_message="PoW puzzle answer incorrect",
+                )
+            redemption_token = redeem_data.get("redemptionToken", "")
+
+            # Continue the challenge
+            challenge_metadata_str = json.dumps({
+                "sessionId": session_id,
+                "redemptionToken": redemption_token,
+            })
+            continue_resp = self.session.post(
+                "https://apis.roblox.com/challenge/v1/continue",
+                json={
+                    "challengeId": challenge_id,
+                    "challengeType": "proofofwork",
+                    "challengeMetadata": challenge_metadata_str,
+                },
+                timeout=config.REQUEST_TIMEOUT,
+            )
+
+            if continue_resp.status_code != 200:
+                return LoginResult(
+                    result_type=LoginResult.CAPTCHA_FAILED,
+                    username=username,
+                    password=password,
+                    error_message="PoW challenge continue failed",
+                )
+
+            # Check if there's a follow-up captcha challenge
+            continue_data = continue_resp.json()
+            next_challenge_type = continue_data.get("challengeType", "")
+            next_metadata_str = continue_data.get("challengeMetadata", "")
+
+            if next_challenge_type == "captcha" and next_metadata_str:
+                try:
+                    next_meta = json.loads(next_metadata_str)
+                    captcha_data = {
+                        "dx_blob": next_meta.get("dataExchangeBlob", ""),
+                        "unified_captcha_id": next_meta.get("unifiedCaptchaId", ""),
+                    }
+                    csrf_token = self.session.headers.get("X-CSRF-TOKEN")
+                    return self._login_with_captcha(
+                        ctype="Username",
+                        cvalue=username,
+                        password=password,
+                        csrf_token=csrf_token,
+                        captcha_data=captcha_data,
+                    )
+                except (json.JSONDecodeError, KeyError):
+                    pass
+
+            # No follow-up challenge — re-login with PoW solution headers
+            csrf_token = self._get_csrf_token()
+            new_metadata = base64.b64encode(json.dumps({
+                "sessionId": session_id,
+                "redemptionToken": redemption_token,
+            }).encode()).decode()
+
+            login_resp = self.session.post(
+                config.ROBLOX_LOGIN_URL,
+                json={
+                    "ctype": "Username",
+                    "cvalue": username,
+                    "password": password,
+                },
+                headers={
+                    "X-CSRF-TOKEN": csrf_token,
+                    "rblx-challenge-id": challenge_id,
+                    "rblx-challenge-type": "proofofwork",
+                    "rblx-challenge-metadata": new_metadata,
+                },
+                timeout=config.REQUEST_TIMEOUT,
+            )
+            return self._parse_login_response(login_resp, username, password)
+
+        except Exception as e:
+            return LoginResult(
+                result_type=LoginResult.CAPTCHA_FAILED,
+                username=username,
+                password=password,
+                error_message=f"PoW challenge error: {str(e)}",
+            )
+
     def _parse_login_response(self, resp, username, password):
         """
         Parse the response from a login attempt and return a LoginResult.
 
         Handles the following response codes:
         - 200: Successful login
-        - 403 with code 0: Wrong credentials
+        - 403 with code 0: Wrong credentials or challenge required
         - 403 with code 1: Two-step verification required
         - 403 with code 2: Captcha required
         - 403 with code 4: Account locked/banned
@@ -338,8 +469,11 @@ class RobloxLogin:
                                 captcha_id=challenge_id_header,
                                 error_message="Captcha challenge via headers but could not extract data",
                             )
+                        elif challenge_type.lower() == "proofofwork":
+                            return self._solve_pow_challenge(
+                                resp, username, password
+                            )
                         else:
-                            # Non-captcha challenge (e.g. proofofwork)
                             return LoginResult(
                                 result_type=LoginResult.CAPTCHA_FAILED,
                                 username=username,
