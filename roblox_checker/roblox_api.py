@@ -293,8 +293,62 @@ class RobloxLogin:
                 message = error.get("message", "")
                 field_data = error.get("fieldData", "")
 
-                # Code 0: Invalid credentials
+                # Code 0: Could be invalid credentials OR a challenge
+                # Roblox may send challenges via response headers instead
+                # of fieldData (e.g. proofofwork, captcha)
                 if code == 0:
+                    challenge_type = resp.headers.get("rblx-challenge-type", "")
+                    challenge_id_header = resp.headers.get("rblx-challenge-id", "")
+                    challenge_metadata = resp.headers.get("rblx-challenge-metadata", "")
+
+                    if challenge_type and challenge_id_header:
+                        # A challenge is required — check the type
+                        if challenge_type.lower() == "captcha":
+                            # Captcha challenge sent via headers
+                            captcha_data = None
+                            if challenge_metadata:
+                                try:
+                                    meta = json.loads(
+                                        base64.b64decode(challenge_metadata).decode()
+                                    )
+                                    captcha_data = {
+                                        "dx_blob": meta.get("dxBlob", ""),
+                                        "unified_captcha_id": meta.get(
+                                            "unifiedCaptchaId", challenge_id_header
+                                        ),
+                                    }
+                                except Exception:
+                                    pass
+                            if captcha_data:
+                                csrf_token = resp.headers.get(
+                                    "X-CSRF-TOKEN",
+                                    self.session.headers.get("X-CSRF-TOKEN"),
+                                )
+                                return self._login_with_captcha(
+                                    ctype="Username",
+                                    cvalue=username,
+                                    password=password,
+                                    csrf_token=csrf_token,
+                                    captcha_data=captcha_data,
+                                )
+                            return LoginResult(
+                                result_type=LoginResult.CAPTCHA_FAILED,
+                                username=username,
+                                password=password,
+                                captcha_id=challenge_id_header,
+                                error_message="Captcha challenge via headers but could not extract data",
+                            )
+                        else:
+                            # Non-captcha challenge (e.g. proofofwork)
+                            return LoginResult(
+                                result_type=LoginResult.CAPTCHA_FAILED,
+                                username=username,
+                                password=password,
+                                captcha_id=challenge_id_header,
+                                error_message=f"Unsupported challenge type: {challenge_type}",
+                            )
+
+                    # No challenge headers — genuinely invalid credentials
                     return LoginResult(
                         result_type=LoginResult.INVALID,
                         username=username,
