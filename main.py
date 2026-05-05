@@ -715,7 +715,7 @@ class Funcaptcha:
             self.solve_time=time.time()
             challenge_data=self._generate_challenge()
             if "DENIED ACCESS" in str(challenge_data):
-                return {"success":False, "err": "invalid blob", "token": None}
+                return {"success":False, "err": f"gfct error: DENIED ACCESS", "token": None}
 
             # Extract game-core version from challenge response
             self.gc_version = "1.22.0"
@@ -906,7 +906,7 @@ class Funcaptcha:
 
             waves=str(result["game_data"]["waves"])
 
-            if int(waves)>=10:
+            if int(waves)>=20:
                 print(game, ':', str(waves))
                 return {"success":False, "err": "too many waves"}
 

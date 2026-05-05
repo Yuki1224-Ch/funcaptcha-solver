@@ -278,12 +278,21 @@ class RobloxLogin:
                 result = (result * result) % N
             answer = str(result)
 
-            # Submit solution
+            # Submit solution (may need CSRF retry)
             redeem_resp = self.session.post(
                 "https://apis.roblox.com/proof-of-work-service/v1/pow-puzzle",
                 json={"sessionID": session_id, "solution": answer},
                 timeout=config.REQUEST_TIMEOUT,
             )
+            if redeem_resp.status_code == 403:
+                csrf = redeem_resp.headers.get("X-CSRF-TOKEN", "")
+                if csrf:
+                    self.session.headers["X-CSRF-TOKEN"] = csrf
+                    redeem_resp = self.session.post(
+                        "https://apis.roblox.com/proof-of-work-service/v1/pow-puzzle",
+                        json={"sessionID": session_id, "solution": answer},
+                        timeout=config.REQUEST_TIMEOUT,
+                    )
             redeem_data = redeem_resp.json()
             if not redeem_data.get("answerCorrect"):
                 return LoginResult(
