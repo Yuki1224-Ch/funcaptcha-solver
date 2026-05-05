@@ -12,9 +12,9 @@ import time
 import threading
 from datetime import datetime
 
-import config
-from roblox_api import RobloxLogin, LoginResult
-from utils import (
+from . import config
+from .roblox_api import RobloxLogin, LoginResult
+from .utils import (
     ComboParser, ProxyManager, ResultSaver, Stats, Display
 )
 
@@ -193,7 +193,7 @@ class RobloxChecker:
 
         # Verify captcha solver is running
         Display.info(f"Checking captcha solver at: {self.captcha_solver_url}")
-        from captcha_solver import CaptchaSolver
+        from .captcha_solver import CaptchaSolver
         solver = CaptchaSolver(self.captcha_solver_url)
         if solver.is_solver_running():
             Display.success("Captcha solver is running")

@@ -19,8 +19,8 @@ API Flow:
 import json
 import base64
 import requests
-import config
-from captcha_solver import CaptchaSolver
+from . import config
+from .captcha_solver import CaptchaSolver
 
 
 class LoginResult:
