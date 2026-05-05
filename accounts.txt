@@ -1,0 +1,8 @@
+# Roblox Combo File
+# Format: username:password (one per line)
+# Example entries below (these are fake/dummy accounts):
+testuser1:password123
+testuser2:MyP@ssw0rd!
+player123:roblox456
+gamer2024:SecurePass1!
+builder_bob:Builder2024
