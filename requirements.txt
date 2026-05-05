@@ -1,2 +1,9 @@
 requests>=2.31.0
 colorama>=0.4.6
+cryptography>=41.0.0
+pycryptodome>=3.19.0
+curl_cffi>=0.5.0
+flask>=3.0.0
+colr>=0.9.1
+PyExecJS>=1.5.1
+javascript>=1!1.2.0

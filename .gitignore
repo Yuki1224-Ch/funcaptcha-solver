@@ -1,18 +1,23 @@
-```
 # Dependencies
 node_modules/
-
-# Package lock file
 package-lock.json
 
-# Environment variables
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+venv/
 .env
 .env.local
 .env.*
 
 # Build artifacts
-dist/
-build/
 *.min.js
 *.min.js.map
 *.js.map
@@ -31,4 +36,6 @@ build/
 # OS generated files
 .DS_Store
 Thumbs.db
-```
+
+# Results (may contain sensitive data)
+results/

@@ -24,25 +24,25 @@
   "cvalue": "username",
   "password": "password"
 }
-</code></pre> </li> <li><strong>Captcha Challenge</strong> — If response contains error code 2, extract:<ul> <li><code>dxBlob</code> — Base64 blob data for the funcaptcha challenge</li> <li><code>unifiedCaptchaId</code> — The captcha ID for re-submission</li> </ul> </li> <li><strong>Solve Captcha</strong> — Send the blob to <code>funcaptcha-solver</code> which:<ul> <li>Uses the Roblox login preset (<code>sitekey: 476068BF-9607-4799-B53D-966BE98E2B81</code>)</li> <li>Communicates with <code>arkoselabs.roblox.com</code></li> <li>Returns a solved captcha token</li> </ul> </li> <li><strong>Re-submit Login</strong> — POST to <code>/v2/login</code> again with:<ul> <li><code>captchaToken</code> in the body</li> <li><code>captchaProvider: "PROVIDER_ARKOSE_LABS"</code></li> <li><code>rblx-challenge-metadata</code> header (base64 JSON with captcha token + ID)</li> <li><code>rblx-challenge-id</code> header</li> <li><code>rblx-captcha-type: "Arkose Labs"</code> header</li> </ul> </li> <li><strong>Parse Result</strong> — Handle success (200 + <code>.ROBLOSECURITY</code> cookie), 2FA (code 1), invalid (code 0), locked (code 4)</li> </ol><h2>Setup</h2><h3>1. Install Dependencies</h3><pre><code class="language-bash"># Checker dependencies
+</code></pre> </li> <li><strong>Captcha Challenge</strong> — If response contains error code 2, extract:<ul> <li><code>dxBlob</code> — Base64 blob data for the funcaptcha challenge</li> <li><code>unifiedCaptchaId</code> — The captcha ID for re-submission</li> </ul> </li> <li><strong>Solve Captcha</strong> — Send the blob to <code>funcaptcha-solver</code> which:<ul> <li>Uses the Roblox login preset (<code>sitekey: 476068BF-9607-4799-B53D-966BE98E2B81</code>)</li> <li>Communicates with <code>arkoselabs.roblox.com</code></li> <li>Returns a solved captcha token</li> </ul> </li> <li><strong>Re-submit Login</strong> — POST to <code>/v2/login</code> again with:<ul> <li><code>captchaToken</code> in the body</li> <li><code>captchaProvider: "PROVIDER_ARKOSE_LABS"</code></li> <li><code>rblx-challenge-metadata</code> header (base64 JSON with captcha token + ID)</li> <li><code>rblx-challenge-id</code> header</li> <li><code>rblx-captcha-type: "Arkose Labs"</code> header</li> </ul> </li> <li><strong>Parse Result</strong> — Handle success (200 + <code>.ROBLOSECURITY</code> cookie), 2FA (code 1), invalid (code 0), locked (code 4)</li> </ol><h2>Setup</h2><h3>1. Install Node.js (Required)</h3><p>The funcaptcha-solver requires <strong>Node.js 16 or newer</strong> to run the JavaScript bridge (JSPyBridge) for tguess generation.</p><ul><li>Download and install from <a href="https://nodejs.org/">https://nodejs.org/</a></li><li>After installing, <strong>restart your terminal/command prompt</strong></li><li>Verify installation: <code>node --version</code></li></ul><p><strong>Windows users:</strong> If you installed Node.js via the Microsoft Store, it may not be on your PATH. Install from <a href="https://nodejs.org/">nodejs.org</a> instead. You may need to log out and log back in for PATH changes to take effect.</p><h3>2. Install Dependencies</h3><pre><code class="language-bash"># Checker dependencies
 pip install requests colorama
 
-# Funcaptcha-solver dependencies (see funcaptcha-solver/README.md)
+# Funcaptcha-solver dependencies
 cd funcaptcha-solver
-pip install cryptography pycryptodome curl_cffi flask colorama colr PyExecJS jsdom
-npm install jsdom
-</code></pre><h3>2. Start the Funcaptcha Solver</h3><pre><code class="language-bash">cd funcaptcha-solver
+pip install -r requirements.txt
+npm install
+</code></pre><h3>3. Start the Funcaptcha Solver</h3><pre><code class="language-bash">cd funcaptcha-solver
 python main.py
-</code></pre><p>This starts the solver API on <code>http://127.0.0.1:8003</code>.</p><h3>3. Prepare Your Combo File</h3><p>Create <code>combo.txt</code> with one <code>username:password</code> entry per line:</p><pre><code>username1:password123
+</code></pre><p>This starts the solver API on <code>http://127.0.0.1:8003</code>.</p><h3>4. Prepare Your Combo File</h3><p>Create <code>combo.txt</code> with one <code>username:password</code> entry per line:</p><pre><code>username1:password123
 username2:MyP@ssw0rd!
 username3:another_pass
-</code></pre><h3>4. (Optional) Add Proxies</h3><p>Create <code>proxies.txt</code> with one proxy per line. Supported formats:</p><pre><code>host:port
+</code></pre><h3>5. (Optional) Add Proxies</h3><p>Create <code>proxies.txt</code> with one proxy per line. Supported formats:</p><pre><code>host:port
 host:port:user:pass
 user:pass@host:port
 http://host:port
 http://user:pass@host:port
 socks5://host:port
-</code></pre><h3>5. Run the Checker</h3><pre><code class="language-bash">python run_checker.py -c combo.txt -t 5
+</code></pre><h3>6. Run the Checker</h3><pre><code class="language-bash">python run_checker.py -c combo.txt -t 5
 </code></pre><h2>Usage</h2><pre><code>python run_checker.py [OPTIONS]
 
 Options:
