@@ -6,12 +6,10 @@ from Crypto.Util.Padding import pad, unpad
 from flask import Flask, request
 from colorama import Fore as f
 from colorama import Fore as b
-from javascript import require
 from Crypto.Cipher import AES
 from datetime import datetime
 from io import BytesIO
 
-import numpy as np
 import contextlib
 import traceback
 import threading
@@ -20,7 +18,6 @@ import secrets
 import hashlib
 import logging
 import string
-import ctypes
 import random
 import struct
 import base64
@@ -32,8 +29,166 @@ import time
 import sys
 import os
 
-jsdom = require('jsdom')
-create_script = require("vm").Script
+# --- Node.js bridge setup with graceful fallback ---
+# The `javascript` package (JSPyBridge) requires Node.js >= 16 to be installed
+# and accessible on the system PATH. On Windows, Node.js may not be found
+# automatically if installed via the Microsoft Store or in a non-standard location.
+# We handle the import gracefully so the user gets a clear error message
+# instead of a cryptic crash.
+
+_jsdom = None
+_create_script = None
+_js_bridge_available = False
+
+def _find_node_path():
+    """Attempt to locate the Node.js executable on Windows."""
+    if sys.platform != 'win32':
+        return None  # On non-Windows, rely on standard PATH resolution
+
+    # Common Node.js install locations on Windows
+    possible_paths = [
+        os.path.join(os.environ.get('PROGRAMFILES', ''), 'nodejs', 'node.exe'),
+        os.path.join(os.environ.get('PROGRAMFILES(X86)', ''), 'nodejs', 'node.exe'),
+        os.path.join(os.environ.get('LOCALAPPDATA', ''), 'Programs', 'nodejs', 'node.exe'),
+        os.path.join(os.environ.get('APPDATA', ''), 'nvm', 'v22.12.0', 'node.exe'),
+    ]
+
+    # Also try to find node via common version dirs in nvm
+    nvm_home = os.environ.get('NVM_HOME', '')
+    if nvm_home and os.path.isdir(nvm_home):
+        try:
+            for entry in os.listdir(nvm_home):
+                node_exe = os.path.join(nvm_home, entry, 'node.exe')
+                if os.path.isfile(node_exe):
+                    possible_paths.append(node_exe)
+        except OSError:
+            pass
+
+    for path in possible_paths:
+        if path and os.path.isfile(path):
+            return path
+
+    return None
+
+def _check_node_available():
+    """Check if Node.js is available and meets the minimum version requirement."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ['node', '--version'],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            version_str = result.stdout.strip().lstrip('v')
+            major = int(version_str.split('.')[0])
+            return major >= 16, version_str
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    # Try finding node manually on Windows
+    if sys.platform == 'win32':
+        node_path = _find_node_path()
+        if node_path:
+            try:
+                result = subprocess.run(
+                    [node_path, '--version'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0:
+                    version_str = result.stdout.strip().lstrip('v')
+                    major = int(version_str.split('.')[0])
+                    if major >= 16:
+                        # Add node's directory to PATH so JSPyBridge can find it
+                        node_dir = os.path.dirname(node_path)
+                        os.environ['PATH'] = node_dir + os.pathsep + os.environ.get('PATH', '')
+                        return True, version_str
+            except Exception:
+                pass
+
+    return False, None
+
+def _init_js_bridge():
+    """Initialize the JSPyBridge (javascript package) connection to Node.js.
+
+    This is called lazily when jsdom/create_script are first needed,
+    rather than at module import time, so that the application can at
+    least start up and provide a helpful error if Node.js is missing.
+    """
+    global _jsdom, _create_script, _js_bridge_available
+
+    if _js_bridge_available:
+        return True
+
+    # First check that Node.js is present and new enough
+    node_ok, node_version = _check_node_available()
+    if not node_ok:
+        print("\n" + "=" * 60)
+        print("  ERROR: Node.js 16+ is required but was not found!")
+        print("=" * 60)
+        print()
+        print("  The funcaptcha-solver needs Node.js (v16 or newer) to run")
+        print("  the JavaScript bridge (JSPyBridge) for tguess generation.")
+        print()
+        print("  Please install Node.js from: https://nodejs.org/")
+        print()
+        print("  After installing Node.js:")
+        print("    1. Restart your terminal / command prompt")
+        print("    2. Verify:  node --version")
+        print("    3. Install npm deps:  npm install jsdom")
+        print("    4. Run this script again")
+        print()
+        if sys.platform == 'win32':
+            print("  NOTE for Windows users:")
+            print("    - If you installed Node.js via the Microsoft Store,")
+            print("      it may not be on your PATH. Try installing from")
+            print("      https://nodejs.org/ instead.")
+            print("    - You may need to log out and log back in after")
+            print("      installing Node.js for PATH changes to take effect.")
+        print("=" * 60)
+        print()
+        _js_bridge_available = False
+        return False
+
+    # Node.js is available; now try importing the javascript bridge
+    try:
+        from javascript import require as _require
+        _jsdom = _require('jsdom')
+        _create_script = _require("vm").Script
+        _js_bridge_available = True
+        return True
+    except Exception as e:
+        print(f"\n  WARNING: Failed to initialize Node.js bridge: {e}")
+        print("  The tguess (dapib) functionality will be unavailable.")
+        print("  Make sure you have installed npm dependencies:")
+        print("    npm install jsdom")
+        print()
+        _js_bridge_available = False
+        return False
+
+def get_jsdom():
+    """Get the jsdom module, initializing the JS bridge if needed."""
+    if _jsdom is None:
+        _init_js_bridge()
+    return _jsdom
+
+def get_create_script():
+    """Get the vm.Script constructor, initializing the JS bridge if needed."""
+    if _create_script is None:
+        _init_js_bridge()
+    return _create_script
+
+def is_js_bridge_available():
+    """Check whether the Node.js bridge (used for tguess) is available."""
+    return _js_bridge_available
+
+# --- End Node.js bridge setup ---
+
 logging.getLogger('werkzeug').setLevel(logging.ERROR)
 with open("webgl.json") as file:
     webgls=json.loads(file.read())
@@ -226,6 +381,18 @@ class Arkose:
 
     @staticmethod
     def t_guess(self, session_token:str, guesses:list, dapibCode:str) -> str:
+        if not is_js_bridge_available():
+            if not _init_js_bridge():
+                logger.print("tguess skipped - Node.js bridge not available", f.RED + "Install Node.js 16+ and run: npm install jsdom")
+                return None
+
+        _jsdom_local = get_jsdom()
+        _create_script_local = get_create_script()
+
+        if _jsdom_local is None or _create_script_local is None:
+            logger.print("tguess skipped - jsdom/vm not available", f.RED + "Install Node.js 16+ and run: npm install jsdom")
+            return None
+
         sess,ion=session_token.split(".")
         answers=[]
         for guess in guesses:
@@ -235,15 +402,15 @@ class Arkose:
                 guess=json.loads(guess)
                 answers.append({"px": guess['px'] ,"py": guess['py'], "x": guess['x'], "y": guess['y'], sess:ion})
 
-        resource_loader = jsdom.ResourceLoader({"userAgent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self.chrome_version}.0.0.0 Safari/537.36"})
-        vm = jsdom.JSDOM("", {
+        resource_loader = _jsdom_local.ResourceLoader({"userAgent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self.chrome_version}.0.0.0 Safari/537.36"})
+        vm = _jsdom_local.JSDOM("", {
             "runScripts": "dangerously",
             "resources": resource_loader,
             "pretendToBeVisual": True,
             "storageQuota": 10000000
         }).getInternalVMContext()
 
-        create_script("""
+        _create_script_local("""
         response=null;
 
         window.parent.ae={"answer":answers}
@@ -253,8 +420,8 @@ class Arkose:
         }
         """.replace("answers",json.dumps(answers).replace('"index"','index'))).runInContext(vm)
 
-        create_script(dapibCode).runInContext(vm)
-        result=json.loads(create_script("response").runInContext(vm))
+        _create_script_local(dapibCode).runInContext(vm)
+        result=json.loads(_create_script_local("response").runInContext(vm))
 
         if Arkose.is_flagged(result["tanswer"]):
             for array in result["tanswer"]:
@@ -477,7 +644,11 @@ class Funcaptcha:
         }
 
         if self.dapibCode:
-            data['tguess']=Arkose.t_guess(self, self.session_token, answers, self.dapibCode)
+            tguess_result = Arkose.t_guess(self, self.session_token, answers, self.dapibCode)
+            if tguess_result is not None:
+                data['tguess'] = tguess_result
+            else:
+                logger.print("Proceeding without tguess - solve may fail", f.YELLOW + "Node.js bridge unavailable")
 
         response = self.session.post(f'{self.apiurl}/fc/ca/', data=data,headers={
             "Accept": "*/*",
@@ -1258,7 +1429,7 @@ class _solver_stats:
 
     def title():
         time.sleep(1)
-        os.system("cls")
+        os.system("cls" if sys.platform == "win32" else "clear")
         second=0;minute=0;hours=0;days=0
 
         while True:
@@ -1269,7 +1440,15 @@ class _solver_stats:
 
             elapsed=f"{str(days).zfill(2)}:{str(hours).zfill(2)}:{str(minute).zfill(2)}:{str(second).zfill(2)}"
 
-            ctypes.windll.kernel32.SetConsoleTitleW(f"Funcaptcha | solved: {str(Utils.solved)} | fail: {str(Utils.fail)} | spm: {str(Utils.spm)} | sup: {_solver_stats.rate(Utils.supc, Utils.supc+Utils.xxsupc)}% | suc: {_solver_stats.rate(Utils.solved, Utils.solved+Utils.fail)}% | errors: {str(Utils.errors)} | elapsed: {elapsed}")
+            title_text = f"Funcaptcha | solved: {str(Utils.solved)} | fail: {str(Utils.fail)} | spm: {str(Utils.spm)} | sup: {_solver_stats.rate(Utils.supc, Utils.supc+Utils.xxsupc)}% | suc: {_solver_stats.rate(Utils.solved, Utils.solved+Utils.fail)}% | errors: {str(Utils.errors)} | elapsed: {elapsed}"
+            if sys.platform == 'win32':
+                try:
+                    import ctypes
+                    ctypes.windll.kernel32.SetConsoleTitleW(title_text)
+                except Exception:
+                    pass
+            else:
+                sys.stdout.write(f"\x1b]2;{title_text}\x07")
             time.sleep(1)
 
 threading.Thread(target=_solver_stats.title).start()
