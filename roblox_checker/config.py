@@ -16,10 +16,10 @@ ROBLOX_LOGIN_APIURL = "https://arkoselabs.roblox.com"
 ROBLOX_REGISTER_SITEKEY = "A2A14B1D-1AF3-C791-9BBC-EE33CC7A0A6F"
 
 # Chrome version for fingerprinting
-CHROME_VERSION = "130"
+CHROME_VERSION = "131"
 
 # Threading
-MAX_THREADS = 5
+MAX_THREADS = 1
 MAX_CAPTCHA_RETRIES = 3
 
 # Proxy settings

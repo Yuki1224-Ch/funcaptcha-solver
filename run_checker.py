@@ -5,21 +5,27 @@ Roblox Account Checker - Entry Point
 Run this script to start the checker.
 
 Usage:
-    python run_checker.py
+    python run_checker.py [OPTIONS]
 
-    That's it! No CLI arguments needed.
-    All settings are in roblox_checker/config.py:
-      - Combo file: accounts.txt
-      - Threads: 1
-      - Proxies: disabled by default
+    Options:
+      -c, --combo       Combo file path (default: combo.txt)
+      -p, --proxies     Proxy file path (default: proxies.txt)
+      -t, --threads     Number of threads (default: 5)
+      --captcha-url     Captcha solver URL (default: http://127.0.0.1:8003)
+      --use-proxies     Enable proxy usage
+      --no-proxies      Disable proxy usage
+      --delay           Delay between checks in seconds (default: 1.0)
+
+    Defaults can be changed in roblox_checker/config.py.
 
 Prerequisites:
     1. Start the funcaptcha-solver first:
        cd funcaptcha-solver && python main.py
 
-    2. Put your accounts in accounts.txt (one per line, format: user:pass)
+    2. Put your accounts in combo.txt (one per line, format: user:pass)
+       Lines starting with # are treated as comments and skipped.
 
-    3. (Optional) Add proxies to proxies.txt and enable in config.py
+    3. (Optional) Add proxies to proxies.txt and enable with --use-proxies
 
     4. Run this script:
        python run_checker.py

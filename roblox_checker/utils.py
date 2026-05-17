@@ -10,7 +10,7 @@ import time
 import threading
 from datetime import datetime
 
-import config
+from . import config
 
 
 class Stats:
@@ -91,7 +91,7 @@ class ComboParser:
         with open(self.filepath, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
                 line = line.strip()
-                if not line:
+                if not line or line.startswith("#"):
                     continue
 
                 parts = line.split(self.delimiter, 1)

@@ -7,7 +7,7 @@ Arkose Labs (Funcaptcha) challenges for Roblox login.
 
 import time
 import requests
-import config
+from . import config
 
 
 class CaptchaSolver:

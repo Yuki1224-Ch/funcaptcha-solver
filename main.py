@@ -20,6 +20,7 @@ import logging
 import string
 import random
 import struct
+import urllib.parse
 import base64
 import execjs
 import colr
@@ -224,8 +225,8 @@ class Utils:
 
     @staticmethod
     def newrelic_time() -> str:
-        a,b=str(time.time()).split(".")
-        return str(a+b[0:5])
+        ms = str(int(time.time() * 1000))
+        return ms[:7] + "00" + ms[7:13]
 
     @staticmethod
     def hex(data: str) -> str:
@@ -402,26 +403,30 @@ class Arkose:
                 guess=json.loads(guess)
                 answers.append({"px": guess['px'] ,"py": guess['py'], "x": guess['x'], "y": guess['y'], sess:ion})
 
-        resource_loader = _jsdom_local.ResourceLoader({"userAgent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self.chrome_version}.0.0.0 Safari/537.36"})
-        vm = _jsdom_local.JSDOM("", {
-            "runScripts": "dangerously",
-            "resources": resource_loader,
-            "pretendToBeVisual": True,
-            "storageQuota": 10000000
-        }).getInternalVMContext()
+        try:
+            resource_loader = _jsdom_local.ResourceLoader({"userAgent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self.chrome_version}.0.0.0 Safari/537.36"})
+            vm = _jsdom_local.JSDOM("", {
+                "runScripts": "dangerously",
+                "resources": resource_loader,
+                "pretendToBeVisual": True,
+                "storageQuota": 10000000
+            }).getInternalVMContext()
 
-        _create_script_local("""
-        response=null;
+            _create_script_local("""
+            response=null;
 
-        window.parent.ae={"answer":answers}
+            window.parent.ae={"answer":answers}
 
-        window.parent.ae[("dapibRecei" + "ve")]=function(data) {
-        response=JSON.stringify(data);
-        }
-        """.replace("answers",json.dumps(answers).replace('"index"','index'))).runInContext(vm)
+            window.parent.ae[("dapibRecei" + "ve")]=function(data) {
+            response=JSON.stringify(data);
+            }
+            """.replace("answers",json.dumps(answers).replace('"index"','index'))).runInContext(vm)
 
-        _create_script_local(dapibCode).runInContext(vm)
-        result=json.loads(_create_script_local("response").runInContext(vm))
+            _create_script_local(dapibCode).runInContext(vm)
+            result=json.loads(_create_script_local("response").runInContext(vm))
+        except (TypeError, AttributeError) as e:
+            logger.print(f"tguess JS execution failed: {e}", f.YELLOW + "Proceeding without tguess")
+            return None
 
         if Arkose.is_flagged(result["tanswer"]):
             for array in result["tanswer"]:
@@ -578,7 +583,11 @@ class Funcaptcha:
         self.blob=blob
         self.chrome_version=chrome_version
         self.useragent=f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self.chrome_version}.0.0.0 Safari/537.36"
-        self.session=requests2.Session(impersonate=None)
+        self.session=requests2.Session(
+            impersonate="chrome131",
+            default_headers=False,
+            verify=False,
+        )
 
         if custom_cookies:
             self.session.cookies.update(custom_cookies)
@@ -588,13 +597,31 @@ class Funcaptcha:
         else:
             self.locale="sv-SE"
 
+        self.proxy = proxy
         if proxy:
             self.session.proxies={"https":proxy}
 
         self.x_ark_value=Arkose.x_ark_value()
 
-        captchadata=self.session.get(f"{self.apiurl}/v2/{self.sitekey}/api.js",headers={'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7','accept-language': f'en-US,en;q=0.9,{self.locale};q=0.8,{self.locale.split("-")[0]};q=0.7','cache-control': 'max-age=0','device-memory': '8','priority': 'u=0, i','sec-ch-dpr': '1','sec-ch-ua': '"Google Chrome";v="129", "Not=A?Brand";v="8", "Chromium";v="129"','sec-ch-ua-arch': '"x86"','sec-ch-ua-bitness': '"64"','sec-ch-ua-form-factors': '"Desktop"','sec-ch-ua-full-version-list': '"Google Chrome";v="129.0.6668.60", "Not=A?Brand";v="8.0.0.0", "Chromium";v="129.0.6668.60"','sec-ch-ua-mobile': '?0','sec-ch-ua-model': '""','sec-ch-ua-platform': '"Windows"','sec-ch-ua-platform-version': '"10.0.0"','sec-ch-viewport-width': '1133','sec-fetch-dest': 'document','sec-fetch-mode': 'navigate','sec-fetch-site': 'none','sec-fetch-user': '?1','upgrade-insecure-requests': '1','user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',}
-        ).text.split("/enforcement.")
+        apijs_resp=self.session.get(f"{self.apiurl}/v2/{self.sitekey}/api.js",headers={
+            'accept': '*/*',
+            'accept-encoding': 'gzip, deflate, br, zstd',
+            'accept-language': f'{self.locale},{self.locale.split("-")[0]};q=0.9,en-US;q=0.8,en;q=0.7',
+            'connection': 'keep-alive',
+            'host': self.apiurl.split('https://')[1],
+            'sec-ch-ua': f'"Not)A;Brand";v="99", "Google Chrome";v="{self.chrome_version}", "Chromium";v="{self.chrome_version}"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'sec-fetch-dest': 'script',
+            'sec-fetch-mode': 'no-cors',
+            'sec-fetch-site': 'same-site',
+            'user-agent': self.useragent,
+        })
+        self.cfuvid_cookie = ""
+        cfuvid = apijs_resp.cookies.get('_cfuvid')
+        if cfuvid:
+            self.cfuvid_cookie = f"_cfuvid={cfuvid.split(';')[0]}"
+        captchadata = apijs_resp.text.split("/enforcement.")
 
         self.capi_version=captchadata[0].split('"')[-1]
         self.enforcement_hash=captchadata[1].split('.html')[0]
@@ -659,7 +686,7 @@ class Funcaptcha:
             "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
             "Host": self.apiurl.split("https://")[1],
             "Origin": self.apiurl,
-            "Referer": f"{self.apiurl}/fc/assets/ec-game-core/game-core/1.22.0/standard/index.html?session={self.token}&r={self.r_continent}&meta=3&meta_width=300&metabgclr=transparent&metaiconclr=%23555555&guitextcolor=%23000000&pk={self.sitekey}&dc=1&at=40&ag=101&cdn_url=https%3A%2F%2F{self.apiurl.split('https://')[1]}%2Fcdn%2Ffc&lurl=https%3A%2F%2Faudio-{self.r_continent}.arkoselabs.com&surl=https%3A%2F%2F{self.apiurl.split('https://')[1]}&smurl=https%3A%2F%2F{self.apiurl.split('https://')[1]}%2Fcdn%2Ffc%2Fassets%2Fstyle-manager&theme=default",
+            "Referer": f"{self.apiurl}/fc/assets/ec-game-core/game-core/{self.gc_version}/standard/index.html?session={self.token}&r={self.r_continent}&meta=3&meta_width=300&metabgclr=transparent&metaiconclr=%23555555&guitextcolor=%23000000&pk={self.sitekey}&dc=1&at=40&ag=101&cdn_url=https%3A%2F%2F{self.apiurl.split('https://')[1]}%2Fcdn%2Ffc&lurl=https%3A%2F%2Faudio-{self.r_continent}.arkoselabs.com&surl=https%3A%2F%2F{self.apiurl.split('https://')[1]}&smurl=https%3A%2F%2F{self.apiurl.split('https://')[1]}%2Fcdn%2Ffc%2Fassets%2Fstyle-manager&theme=default",
             "sec-ch-ua": f"\"Not)A;Brand\";v=\"99\", \"Google Chrome\";v=\"{self.chrome_version}\", \"Chromium\";v=\"{self.chrome_version}\"",
             "sec-ch-ua-mobile": "?0",
             "sec-ch-ua-platform": "\"Windows\"",
@@ -676,77 +703,189 @@ class Funcaptcha:
         })
         return response.json()
 
-    def callback(self, data):
-        self.session.post(f"{self.apiurl}/fc/a/",data=data,headers={
-            "Accept": "*/*",
-            "Accept-Encoding": "gzip, deflate, br, zstd",
-            "Accept-Language": f"{self.locale},{self.locale.split('-')[0]};q=0.9,en-US;q=0.8,en;q=0.7",
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-            "Host": self.apiurl.split('https://')[1],
-            "Origin": self.apiurl,
-            "Referer": f"{self.apiurl}/fc/assets/ec-game-core/game-core/1.22.0/standard/index.html?session={self.token}&r={self.r_continent}&meta=7&meta_height=325&metabgclr=%23ffffff&metaiconclr=%23757575&mainbgclr=%23ffffff&maintxtclr=%231B1B1B&guitextcolor=%23747474&lang={self.locale.split('-')[0]}&pk={self.sitekey}&at=40&ag=101&cdn_url=https%3A%2F%2F{self.apiurl.split('https://')[1]}%2Fcdn%2Ffc&lurl=https%3A%2F%2Faudio-{self.r_continent}.arkoselabs.com&surl=https%3A%2F%2F{self.apiurl.split('https://')[1]}&smurl=https%3A%2F%2F{self.apiurl.split('https://')[1]}%2Fcdn%2Ffc%2Fassets%2Fstyle-manager&theme=default",
-            "sec-ch-ua": f"\"Not)A;Brand\";v=\"99\", \"Google Chrome\";v=\"{self.chrome_version}\", \"Chromium\";v=\"{self.chrome_version}\"",
-            "sec-ch-ua-mobile": "?0",
-            "sec-ch-ua-platform": "\"Windows\"",
-            "Sec-Fetch-Dest": "empty",
-            "Sec-Fetch-Mode": "cors",
-            "Sec-Fetch-Site": "same-origin",
-            "User-Agent": f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self.chrome_version}.0.0.0 Safari/537.36",
-            "X-NewRelic-Timestamp": Utils.newrelic_time(),
-            "X-Requested-With": "XMLHttpRequest"
-        })
+    def _make_cookie_header(self, timestamp=None):
+        parts = []
+        if self.cfuvid_cookie:
+            parts.append(self.cfuvid_cookie)
+        if timestamp:
+            parts.append(f"timestamp={timestamp}")
+        return "; ".join(parts)
+
+    def callback(self, data, cookies=None):
+        self.session.post(f"{self.apiurl}/fc/a/", data=data, cookies=cookies)
+
+    def _classify_image(self, base64_img, game_data):
+        """Classify a funcaptcha challenge image using AI vision API.
+        
+        Supports OpenAI (OPENAI_API_KEY) and Google Gemini (GEMINI_API_KEY).
+        Returns the answer index (0-based for game_type 4, or grid index for type 3).
+        """
+        import requests as py_requests
+        
+        instruction = game_data.get('instruction_string', '')
+        game_type = game_data.get('gameType', 4)
+        game_variant = game_data.get('game_variant', '')
+        
+        # Build the classification prompt
+        if game_type == 4:
+            prompt = (
+                f"This is a funcaptcha challenge image of type '{instruction}'. "
+                "The image is a filmstrip showing cups with icons being shuffled. "
+                "At the bottom-left corner there is a reference icon showing which icon to track. "
+                "Look at the LAST frame (rightmost part of the filmstrip) and determine which cup "
+                "position (numbered 0-5, left to right) has the icon matching the reference. "
+                "The cups are arranged in the scene - count positions from left to right. "
+                "Reply with ONLY a single digit (0-5), nothing else."
+            )
+        elif game_type == 3:
+            prompt = (
+                f"This is a funcaptcha grid challenge of type '{instruction}'. "
+                f"Game variant: {game_variant}. "
+                "The image shows a grid. Identify the correct cell. "
+                "Reply with ONLY a single digit (0-5 for the grid position), nothing else."
+            )
+        else:
+            prompt = (
+                f"This is a funcaptcha challenge. Type: {game_type}, instruction: '{instruction}'. "
+                "Determine the correct answer index (0-5). "
+                "Reply with ONLY a single digit, nothing else."
+            )
+
+        # Try OpenAI first
+        openai_key = os.environ.get('OPENAI_API_KEY', '')
+        if openai_key:
+            try:
+                resp = py_requests.post(
+                    'https://api.openai.com/v1/chat/completions',
+                    headers={'Authorization': f'Bearer {openai_key}', 'Content-Type': 'application/json'},
+                    json={
+                        'model': 'gpt-4o',
+                        'messages': [{
+                            'role': 'user',
+                            'content': [
+                                {'type': 'text', 'text': prompt},
+                                {'type': 'image_url', 'image_url': {'url': f'data:image/png;base64,{base64_img}', 'detail': 'high'}}
+                            ]
+                        }],
+                        'max_tokens': 10,
+                        'temperature': 0
+                    },
+                    timeout=30
+                )
+                if resp.status_code == 200:
+                    answer = resp.json()['choices'][0]['message']['content'].strip()
+                    for ch in answer:
+                        if ch.isdigit() and int(ch) <= 5:
+                            print(f"[CLASSIFY] OpenAI answer: {ch} (raw: {answer})", flush=True)
+                            return int(ch)
+                else:
+                    print(f"[CLASSIFY] OpenAI error: {resp.status_code} {resp.text[:200]}", flush=True)
+            except Exception as e:
+                print(f"[CLASSIFY] OpenAI exception: {e}", flush=True)
+
+        # Try Gemini
+        gemini_key = os.environ.get('GEMINI_API_KEY', '')
+        if gemini_key:
+            try:
+                resp = py_requests.post(
+                    f'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={gemini_key}',
+                    headers={'Content-Type': 'application/json'},
+                    json={
+                        'contents': [{'parts': [
+                            {'text': prompt},
+                            {'inline_data': {'mime_type': 'image/png', 'data': base64_img}}
+                        ]}],
+                        'generationConfig': {'temperature': 0, 'maxOutputTokens': 10}
+                    },
+                    timeout=30
+                )
+                if resp.status_code == 200:
+                    answer = resp.json()['candidates'][0]['content']['parts'][0]['text'].strip()
+                    for ch in answer:
+                        if ch.isdigit() and int(ch) <= 5:
+                            print(f"[CLASSIFY] Gemini answer: {ch} (raw: {answer})", flush=True)
+                            return int(ch)
+                else:
+                    print(f"[CLASSIFY] Gemini error: {resp.status_code} {resp.text[:200]}", flush=True)
+            except Exception as e:
+                print(f"[CLASSIFY] Gemini exception: {e}", flush=True)
+
+        # Try local Ollama (moondream vision model)
+        try:
+            resp = py_requests.post(
+                'http://localhost:11434/api/generate',
+                json={
+                    'model': os.environ.get('OLLAMA_MODEL', 'moondream'),
+                    'prompt': prompt,
+                    'images': [base64_img],
+                    'stream': False
+                },
+                timeout=120
+            )
+            if resp.status_code == 200:
+                answer = resp.json().get('response', '').strip()
+                for ch in answer:
+                    if ch.isdigit() and int(ch) <= 5:
+                        print(f"[CLASSIFY] Ollama answer: {ch} (raw: {answer[:50]})", flush=True)
+                        return int(ch)
+                print(f"[CLASSIFY] Ollama no valid digit in: {answer[:100]}", flush=True)
+        except Exception as e:
+            print(f"[CLASSIFY] Ollama not available: {e}", flush=True)
+
+        # Fallback: random guess
+        fallback = random.randint(0, 5)
+        print(f"[CLASSIFY] All classifiers failed. Random fallback: {fallback}", flush=True)
+        return fallback
 
     def solve(self):
         try:
             self.solve_time=time.time()
             challenge_data=self._generate_challenge()
             if "DENIED ACCESS" in str(challenge_data):
-                return {"success":False, "err": "invalid blob", "token": None}
+                return {"success":False, "err": f"gfct error: DENIED ACCESS", "token": None}
 
-            del self.session.headers["Content-Type"]
-            del self.session.headers["x-ark-esync-value"]
+            # Extract game-core version from challenge response
+            self.gc_version = "1.22.0"
+            cdn_url = challenge_data.get("challenge_url_cdn", "")
+            if "/bootstrap/" in cdn_url:
+                self.gc_version = cdn_url.split("/bootstrap/")[1].split("/")[0]
+
             self.token=challenge_data["token"].split("|")[0]
             self.r_continent=challenge_data["token"].split("|r=")[1].split("|")[0]
-            self.session.get(f'{self.apiurl}/fc/gc/', params={'token': self.token})
-            
-            self.session.headers.update({
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
-                "Sec-Fetch-Dest": "iframe",
-                "Sec-Fetch-Mode": "navigate",
-                "Upgrade-Insecure-Requests": "1"
-            })
-            referer=self.session.get(
-                f'{self.apiurl}/fc/assets/ec-game-core/game-core/1.22.0/standard/index.html',
-                params={
-                    'session': self.token,
-                    'r': self.r_continent,
-                    'meta': '3',
-                    'meta_width': '300',
-                    'metabgclr': 'transparent',
-                    'metaiconclr': '#555555',
-                    'guitextcolor': '#000000',
-                    'pk': self.sitekey,
-                    'dc': '1',
-                    'at': '40',
-                    'ag': '101',
-                    'cdn_url': f'{self.apiurl}/cdn/fc',
-                    'lurl': f'https://audio-{self.r_continent}.arkoselabs.com',
-                    'surl': self.apiurl,
-                    'smurl': f'{self.apiurl}/cdn/fc/assets/style-manager',
-                    'theme': 'default'
-            }).url
-            self.callback({"sid": self.r_continent,"session_token": self.token,"analytics_tier": "40","disableCookies": "true", "render_type": "canvas","is_compatibility_mode": "false","category": "Site URL","action": f"{self.apiurl}/v2/{self.capi_version}/enforcement.{self.enforcement_hash}.html"})
+
+            # Parse additional token fields
+            raw_token = challenge_data["token"]
+            self.at = raw_token.split("|at=")[1].split("|")[0] if "|at=" in raw_token else "40"
+            self.ag = raw_token.split("|ag=")[1].split("|")[0] if "|ag=" in raw_token else "101"
+            token_cdn = urllib.parse.unquote(raw_token.split("|cdn_url=")[1].split("|")[0]) if "|cdn_url=" in raw_token else f"{self.apiurl}/cdn/fc"
+            token_surl = urllib.parse.unquote(raw_token.split("|surl=")[1].split("|")[0]) if "|surl=" in raw_token else self.apiurl
+            token_smurl = urllib.parse.unquote(raw_token.split("|smurl=")[1].split("|")[0]) if "|smurl=" in raw_token else f"{self.apiurl}/cdn/fc/assets/style-manager"
 
             if "sup=1|" in challenge_data["token"]:
-                self.session.headers.update({
-                    "Accept": "*/*",
-                    "Sec-Fetch-Dest": "script",
-                    "Sec-Fetch-Mode": "no-cors",
-                    "Sec-Fetch-Site": "same-origin"
-                })
+                # Suppressed token: init-load → game loaded → return
+                self.session.headers = {
+                    "accept": "*/*",
+                    "accept-encoding": "gzip, deflate, br, zstd",
+                    "accept-language": f"{self.locale},{self.locale.split('-')[0]};q=0.9,en-US;q=0.8,en;q=0.7",
+                    "connection": "keep-alive",
+                    "host": self.apiurl.split('https://')[1],
+                    "referer": f"{self.apiurl}/v2/{self.capi_version}/enforcement.{self.enforcement_hash}.html",
+                    "sec-ch-ua": f"\"Not)A;Brand\";v=\"99\", \"Google Chrome\";v=\"{self.chrome_version}\", \"Chromium\";v=\"{self.chrome_version}\"",
+                    "sec-ch-ua-mobile": "?0",
+                    "sec-ch-ua-platform": "\"Windows\"",
+                    "sec-fetch-dest": "empty",
+                    "sec-fetch-mode": "cors",
+                    "sec-fetch-site": "same-origin",
+                    "user-agent": self.useragent,
+                }
+                init_ts = Arkose.x_ark_value()
+                self.session.get(f'{self.apiurl}/fc/init-load/', params={'session_token': self.token}, cookies={**dict(self.session.cookies), "timestamp": init_ts})
 
+                self.session.headers.update({
+                    "sec-fetch-dest": "script",
+                    "sec-fetch-mode": "no-cors",
+                    "sec-fetch-site": "same-origin",
+                })
                 self.session.get(
                     f"{self.apiurl}/fc/a/",
                     params={
@@ -765,30 +904,125 @@ class Funcaptcha:
                 return {"success":True, "err": None, "token": challenge_data["token"], "procces_time": time.time()-self.solve_time}
             
             Utils.xxsupc+=1
-            self.session.headers.update({
+
+            # Step 1: Load game-core index.html to get referer URL
+            self.session.headers = {
+                "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+                "accept-encoding": "gzip, deflate, br, zstd",
+                "accept-language": f"{self.locale},{self.locale.split('-')[0]};q=0.9,en-US;q=0.8,en;q=0.7",
+                "connection": "keep-alive",
+                "host": self.apiurl.split('https://')[1],
+                "referer": f"{self.apiurl}/v2/{self.capi_version}/enforcement.{self.enforcement_hash}.html",
+                "sec-ch-ua": f"\"Not)A;Brand\";v=\"99\", \"Google Chrome\";v=\"{self.chrome_version}\", \"Chromium\";v=\"{self.chrome_version}\"",
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": "\"Windows\"",
+                "sec-fetch-dest": "iframe",
+                "sec-fetch-mode": "navigate",
+                "sec-fetch-site": "same-origin",
+                "upgrade-insecure-requests": "1",
+                "user-agent": self.useragent,
+            }
+            referer=self.session.get(
+                f'{self.apiurl}/fc/assets/ec-game-core/game-core/{self.gc_version}/standard/index.html',
+                params={
+                    'session': self.token,
+                    'r': self.r_continent,
+                    'lang': self.locale.split("-")[0],
+                    'pk': self.sitekey,
+                    'at': self.at,
+                    'ag': self.ag,
+                    'cdn_url': token_cdn,
+                    'surl': token_surl,
+                    'smurl': token_smurl,
+                    'theme': 'default'
+            }).url
+
+            # Step 2: Arkose PoW (if enabled)
+            if challenge_data.get("pow"):
+                pow_resp = self.session.get(
+                    f'{self.apiurl}/pows/setup',
+                    params={'session_token': self.token},
+                    cookies={**dict(self.session.cookies), "timestamp": Arkose.x_ark_value()},
+                )
+                pow_data = pow_resp.json()
+                # Download the PoW HTML page (required by server)
+                if pow_data.get("url"):
+                    self.session.get(pow_data["url"])
+                # Solve PoW via Node.js worker (handles obfuscated sequence JS)
+                import requests as py_requests
+                try:
+                    pow_result = py_requests.post('http://127.0.0.1:8004/solve', json={
+                        'pow_setup': pow_data,
+                        'session_token': self.token,
+                        'proxy': self.proxy if hasattr(self, 'proxy') else None,
+                    }, timeout=90).json()
+                except Exception as pow_err:
+                    return {"success": False, "err": f"pow solver error: {pow_err}", "token": None}
+                if not pow_result.get('success'):
+                    return {"success": False, "err": f"pow solve failed: {pow_result.get('error')}", "token": None}
+                pow_check_data = pow_result['result']
+                pow_check_resp = self.session.post(
+                    f'{self.apiurl}/pows/check',
+                    json=pow_check_data,
+                    cookies={**dict(self.session.cookies), "timestamp": Arkose.x_ark_value()},
+                )
+
+            # Step 3: init-load
+            init_ts = Arkose.x_ark_value()
+            self.session.headers = {
                 "accept": "*/*",
-                "priority": "u=1, i",
-                "referer": referer,
+                "accept-encoding": "gzip, deflate, br, zstd",
+                "accept-language": f"{self.locale},{self.locale.split('-')[0]};q=0.9,en-US;q=0.8,en;q=0.7",
+                "connection": "keep-alive",
+                "host": self.apiurl.split('https://')[1],
+                "referer": f"{self.apiurl}/v2/{self.capi_version}/enforcement.{self.enforcement_hash}.html",
+                "sec-ch-ua": f"\"Not)A;Brand\";v=\"99\", \"Google Chrome\";v=\"{self.chrome_version}\", \"Chromium\";v=\"{self.chrome_version}\"",
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": "\"Windows\"",
                 "sec-fetch-dest": "empty",
                 "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-origin",
+                "user-agent": self.useragent,
+            }
+            self.session.get(f'{self.apiurl}/fc/init-load/', params={'session_token': self.token}, cookies={**dict(self.session.cookies), "timestamp": init_ts})
+
+            # Step 4: Get challenge data (fc/gfct/) - BEFORE analytics
+            ts2 = Utils.newrelic_time()
+            self.session.headers = {
+                "accept": "*/*",
+                "accept-encoding": "gzip, deflate, br, zstd",
+                "accept-language": f"{self.locale},{self.locale.split('-')[0]};q=0.9,en-US;q=0.8,en;q=0.7",
                 "cache-control": "no-cache",
+                "connection": "keep-alive",
                 "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "origin": self.apiurl,
-                "x-newrelic-timestamp": Utils.newrelic_time(),
-                "x-requested-with": "XMLHttpRequest"
-            })
+                "host": self.apiurl.split('https://')[1],
+                "origin": self.siteurl,
+                "referer": referer,
+                "sec-ch-ua": f"\"Not)A;Brand\";v=\"99\", \"Google Chrome\";v=\"{self.chrome_version}\", \"Chromium\";v=\"{self.chrome_version}\"",
+                "sec-ch-ua-mobile": "?0",
+                "sec-ch-ua-platform": "\"Windows\"",
+                "sec-fetch-dest": "empty",
+                "sec-fetch-mode": "cors",
+                "sec-fetch-site": "same-origin",
+                "user-agent": self.useragent,
+                "x-newrelic-timestamp": ts2,
+                "x-requested-with": "XMLHttpRequest",
+            }
 
-            result=self._task_data()
+            result=self._task_data(cookies={**dict(self.session.cookies), "timestamp": ts2})
 
-            del self.session.headers["cache-control"]
-            del self.session.headers["content-type"]
-            del self.session.headers["origin"]
-            del self.session.headers["x-newrelic-timestamp"]
-            del self.session.headers["x-requested-with"]
-            
-            self.gameid=result["challengeID"]
+            if result.get("error"):
+                return {"success":False, "err": f"gfct error: {result['error']}", "token": None}
+
+            self.gameid=result.get("challengeID") or result.get("challenge_id") or result.get("game_token")
             self.session_token=result["session_token"]
-            self.callback({"sid": self.r_continent,"session_token": self.token,"analytics_tier": "40","disableCookies": "true","game_token": self.gameid,"game_type": "4","render_type": "canvas","is_compatibility_mode": "false","category": "loaded","action": "game loaded"})
+
+            # Step 3: Site URL analytics (AFTER gfct)
+            ts = Utils.newrelic_time()
+            self.callback({"sid": self.r_continent,"session_token": self.token,"analytics_tier": self.at,"disableCookies": "false","render_type": "canvas","is_compatibility_mode": "false","category": "Site URL","action": f"{self.apiurl}/v2/{self.capi_version}/enforcement.{self.enforcement_hash}.html"}, cookies={**dict(self.session.cookies), "timestamp": ts})
+
+            # Step 4: Game loaded analytics
+            self.callback({"sid": self.r_continent,"session_token": self.token,"analytics_tier": self.at,"disableCookies": "false","game_token": self.gameid,"game_type": "4","render_type": "canvas","is_compatibility_mode": "false","category": "loaded","action": "game loaded"}, cookies={**dict(self.session.cookies), "timestamp": Utils.newrelic_time()})
             
             answers=[]
             test=[]
@@ -799,7 +1033,7 @@ class Funcaptcha:
 
             waves=str(result["game_data"]["waves"])
 
-            if int(waves)>=10:
+            if int(waves)>=20:
                 print(game, ':', str(waves))
                 return {"success":False, "err": "too many waves"}
 
@@ -828,7 +1062,7 @@ class Funcaptcha:
                 else:
                     base64_img=base64.b64encode(self.session.get(img).content).decode()
 
-                index=... #Do classification urself!!
+                index = self._classify_image(base64_img, result['game_data'])
 
                 if result["game_data"]["gameType"]==3:
                     index+=1
@@ -861,11 +1095,12 @@ class Funcaptcha:
                 return {"success":False, "err":"ai fail", "token": None}
             
         except Exception as err:
-            print(traceback.format_exc())
+            tb = traceback.format_exc()
+            print(f"[SOLVE ERROR] {tb}", flush=True)
             Utils.errors+=1
-            return {"success":False, "err": "internal error", "token": None}
+            return {"success":False, "err": f"internal error: {str(err)}", "token": None}
             
-    def _task_data(self):
+    def _task_data(self, cookies=None):
         return self.session.post(f"{self.apiurl}/fc/gfct/",data={
             'token': self.token,
             'sid': self.r_continent,
@@ -874,8 +1109,8 @@ class Funcaptcha:
             'isAudioGame': 'false',
             'is_compatibility_mode': 'false',
             'apiBreakerVersion': 'green',
-            'analytics_tier': '40',
-        }).json()
+            'analytics_tier': self.at,
+        }, cookies=cookies).json()
 
     def md5_hash(self, data):
         md5_hash = hashlib.md5()
@@ -1222,7 +1457,7 @@ class Funcaptcha:
             },
             {
                 "key":"document__referrer",
-                "value":self.siteurl+"/"
+                "value":self.siteurl.rstrip("/")
             },
             {
                 "key":"window__ancestor_origins",
@@ -1309,12 +1544,44 @@ class Funcaptcha:
                 "value":self.enforcement_hash
             },
             {
+                "key":"is_keyless",
+                "value":False
+            },
+            {
+                "key":"c2d2015",
+                "value":"29d13b1af8803cb86c2697345d7ea9eb"
+            },
+            {
+                "key":"43f2d94",
+                "value":False
+            },
+            {
+                "key":"20c15922",
+                "value":True
+            },
+            {
+                "key":"4f59ca8",
+                "value":None
+            },
+            {
+                "key":"3ea7194",
+                "value":{"supported":True,"formats":["HDR10","HLG"],"isHDR":False}
+            },
+            {
+                "key":"05d3d24",
+                "value":"d53459d339bbc3faafe9c7c19c2105ca"
+            },
+            {
                 "key":"speech_default_voice",
                 "value":"Microsoft David - English (United States) || en-US"
             },
             {
                 "key":"speech_voices_hash",
                 "value":str(uuid.uuid4().hex)
+            },
+            {
+                "key":"83eb055",
+                "value":False
             },
             {
                 "key":"4ca87df3d1",
@@ -1381,34 +1648,39 @@ class Funcaptcha:
             "capi_mode": "inline",
             "style_theme": "default",
             "rnd": str(random.uniform(0, 1)),
-            'language': self.locale.split("-")[0]
         }
 
         if self.sitekey=="747B83EC-2CA3-43AD-A7DF-701F286FBABA":
             task["data[origin_page]"]="github_signup_redesign"
         if self.blob:
             task["data[blob]"]=self.blob
+
+        self.session.headers = {
+            'accept': '*/*',
+            'accept-encoding': 'gzip, deflate, br, zstd',
+            'accept-language': f'{self.locale},{self.locale.split("-")[0]};q=0.9,en-US;q=0.8,en;q=0.7',
+            'connection': 'keep-alive',
+            'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+            'host': self.apiurl.split('https://')[1],
+            'origin': self.apiurl,
+            'referer': f'{self.apiurl}/v2/{self.capi_version}/enforcement.{self.enforcement_hash}.html',
+            'sec-ch-ua': f'"Not)A;Brand";v="99", "Google Chrome";v="{self.chrome_version}", "Chromium";v="{self.chrome_version}"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'sec-fetch-dest': 'empty',
+            'sec-fetch-mode': 'cors',
+            'sec-fetch-site': 'same-origin',
+            'user-agent': self.useragent,
+            'x-ark-esync-value': self.x_ark_value,
+        }
         
-        return self.session.post(
+        gt2_resp = self.session.post(
             f'{self.apiurl}/fc/gt2/public_key/{self.sitekey}',
             data=task,
-            headers={
-                'accept': '*/*',
-                'accept-language': f'en-US,en;q=0.9,{self.locale};q=0.8,{self.locale.split("-")[0]};q=0.7',
-                'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'origin': self.apiurl,
-                'priority': 'u=1, i',
-                'referer': f'{self.apiurl}/v2/{self.capi_version}/enforcement.{self.enforcement_hash}.html',
-                'sec-ch-ua': '"Chromium";v="128", "Not;A=Brand";v="24", "Google Chrome";v="128"',
-                'sec-ch-ua-mobile': '?0',
-                'sec-ch-ua-platform': '"Windows"',
-                'sec-fetch-dest': 'empty',
-                'sec-fetch-mode': 'cors',
-                'sec-fetch-site': 'same-origin',
-                'user-agent': f'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/{self.chrome_version}.0.0.0 Safari/537.36',
-                'x-ark-esync-value': self.x_ark_value,
-            }
-        ).json()
+            cookies={**dict(self.session.cookies), "timestamp": self.x_ark_value},
+        )
+        gt2_data = gt2_resp.json()
+        return gt2_data
 
 class _solver_stats:
     def calc_cpm():
